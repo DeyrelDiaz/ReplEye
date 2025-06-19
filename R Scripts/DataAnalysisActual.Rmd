@@ -1,0 +1,2105 @@
+---
+title: "DataAnalysisPilot"
+output: html_document
+date: "2024-04-21"
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+# R setup
+
+## Libraries
+
+```{r, warning=FALSE, message=FALSE}
+# Remove all objects, including hidden ones and free up memory
+rm(list = ls(all.names = TRUE))
+gc()
+
+# Load tidyverse first as it covers dplyr, ggplot2, tibble, magrittr, etc.
+if (!require(tidyverse)) {install.packages("tidyverse"); library(tidyverse)}
+# Explicitly load magrittr to ensure availability of %<>% operator
+if (!require(magrittr)) {install.packages("magrittr"); library(magrittr)}
+
+# Load essential matrix and statistical modeling packages
+if (!require(car)) {install.packages("car"); library(car)}
+if (!require(Matrix)) {install.packages("Matrix"); library(Matrix)}
+if (!require(lme4)) {install.packages("lme4", dependencies = TRUE); library(lme4)}
+if (!require(lmerTest)) {install.packages("lmerTest"); library(lmerTest)}
+if (!require(lmtest)) {install.packages("lmtest"); library(lmtest)}
+if (!require(ordinal)) {install.packages("ordinal"); library(ordinal)}
+if (!require(geepack)) {install.packages("geepack"); library(geepack)}
+if (!require(robustlmm)) {install.packages("robustlmm"); library(robustlmm)}
+if (!require(buildmer)) {install.packages("buildmer"); library(buildmer)}
+if (!require(afex)) {install.packages("afex"); library(afex)}
+if (!require(emmeans)) {install.packages("emmeans"); library(emmeans)}
+if (!require(MuMIn)) {install.packages("MuMIn"); library(MuMIn)}
+if (!require(effectsize)) {install.packages("effectsize"); library(effectsize)}
+if (!require(psych)) {install.packages("psych"); library(psych)}
+if (!require(nnet)) {install.packages("nnet"); library(nnet)}
+if (!require(nortest)) {install.packages("nortest"); library(nortest)}
+if (!require(MASS)) {install.packages("MASS"); library(MASS)}
+if (!require(DHARMa)) {install.packages("DHARMa"); library(DHARMa)}
+if (!require(FSA)) {install.packages("FSA"); library(FSA)}
+if (!require(gamm4)) {install.packages("gamm4"); library(gamm4)}
+
+# Load additional data manipulation and visualization packages
+if (!require(ggsignif)) {install.packages("ggsignif"); library(ggsignif)}
+if (!require(ggpubr)) {install.packages("ggpubr"); library(ggpubr)}
+
+# Load performance and reporting tools
+if (!require(forcats)) {install.packages("forcats"); library(forcats)}
+if (!require(easystats)) {install.packages("easystats"); library(easystats)}
+if (!require(broom.mixed)) {install.packages("broom.mixed"); library(broom.mixed)}
+if (!require(r2glmm)) {install.packages("r2glmm"); library(r2glmm)}
+if (!require(rsq)) {install.packages("rsq"); library(rsq)}
+if (!require(pwr)) {install.packages("pwr"); library(pwr)}
+
+# Embedded Plot Fonts
+if (!require(Cairo)) {install.packages("Cairo"); library(Cairo)}
+```
+
+# Data Set-up
+
+### Folder references
+
+```{r}
+base_path <- "AEGBData"
+
+# List all folders in the directory
+folders <- list.files(base_path, full.names = TRUE)
+```
+
+### merging all survey data into one big dataframe
+
+```{r, warning=FALSE, message=FALSE}
+# Filter folders with names starting with "P_"
+p_folders <- grep("^P_\\d{3}$", basename(folders), value = TRUE)
+
+# Create an empty list to store the results
+allSurveyData <- data.frame()
+
+# Likert scale mapping
+likert_mapping <- c(
+  "Very Strongly Disagree" = 1,
+  "Strongly Disagree" = 2,
+  "Disagree" = 3,
+  "Neutral" = 4,
+  "Agree" = 5,
+  "Strongly Agree" = 6,
+  "Very Strongly Agree" = 7
+)
+
+# Loop through each folder
+for (p_folder in p_folders) {
+  # Define the path to the CSV file
+  file_path <- file.path(base_path, p_folder, "SurveyData.CSV")
+  
+  # Check if the file exists before trying to read it
+  if (file.exists(file_path)) {
+    # Read the CSV file
+    survey_data <- read.csv(file_path, stringsAsFactors = FALSE, row.names = NULL)
+    
+    # Combine data frames using rbind
+    allSurveyData <- rbind(allSurveyData, survey_data)
+  }
+}
+
+# List of column names to convert
+cols_to_convert <- c(11:18)
+# Apply Likert scale conversion to the specified columns
+for (col_num in cols_to_convert) {
+  if (col_num <= ncol(allSurveyData)) {
+    allSurveyData[[col_num]] <- likert_mapping[allSurveyData[[col_num]]]
+  }
+}
+
+# Summarize the data
+summary(allSurveyData)
+```
+
+
+### merging pre-survey data into one big dataframe
+
+```{r, warning=FALSE, message=FALSE}
+# Putting pre-survey in a dataframe
+preData <- read.csv(file.path(base_path, "AEGB Pre-Survey.CSV"), stringsAsFactors = FALSE, row.names = NULL)
+
+colnames(preData) <- c("DayTime","PID","Age","Sex","ParRace","Vision","Games","Platform","GamesHours","GamesLong","WornXR","HoursXR")
+
+# Factor the specified columns
+preData[c(2,4:ncol(preData))] <- lapply(preData[c(2,4:ncol(preData))], as.factor)
+
+# Descriptive statistics for age and sex
+print("Age: ")
+mean(preData$Age)
+sd(preData$Age)
+print("Sex: ")
+summary(preData$Sex)
+
+# Count occurrences of each Sex using dplyr
+print("Race: ")
+summary(preData$ParRace)
+print("XR Experience: ")
+summary(preData$WornXR)
+print("XR Experience for worn: ")
+summary(preData$HoursXR[preData$WornXR == "Yes"])
+
+# Gaming experience
+print("Age: ")
+mean(preData$Games[preData$Games == "Yes"])
+sd(preData$Age)
+print("Sex: ")
+summary(preData$Games)
+
+```
+
+
+### merging post-survey data into one big dataframe
+
+```{r, warning=FALSE, message=FALSE}
+# Putting pre-survey in a dataframe
+postData <- read.csv(file.path(base_path, "AEGB Post-Survey.CSV"), stringsAsFactors = FALSE, row.names = NULL)
+
+colnames(postData) <- c("DayTime","PID","ChooseFocus","Difficulties","Comments")
+
+# Factor the specified columns
+postData[2] <- lapply(postData[2], as.factor)
+
+# Summarize the data
+summary(postData)
+```
+
+
+### merging all matrix data into one big dataframe
+
+PID: Participant ID. 
+Gender: Categorical, what was the avatars gender 
+Race: Categorical, what was the avatars race.
+Script: Categorical, which script was being played.
+Timestamp: The timestamp for each data entry.
+DistanceFromAv: Numeric, possibly a distance measure from an average value.
+DistanceChangeSinceTrial: Numeric, change in distance since the start of the trial.
+EyeVelocity: Numeric, measures eye movement speed.
+EyeMovementType: Categorical, type of eye movement (e.g., Fixation, Saccade).
+ScanPathDistance: Numeric, distance of the scan path.
+CameraVelocity: Numeric, speed of the camera movement.
+Collider: Categorical, potentially indicates interaction or collision type.
+Trial: Categorical, trial number.
+
+```{r, warning=FALSE, message=FALSE}
+# Filter folders with names starting with "S_"
+s_folders <- grep("^S_\\d{3}$", basename(folders), value = TRUE)
+
+# Create an empty list to store the results
+allMatrixData <- data.frame()
+
+# Loop through each folder
+for (s_folder in s_folders) {
+  # List matrix files in the current subfolder
+  t_files <- list.files(file.path(base_path, s_folder), full.names = TRUE, recursive = TRUE)
+
+  # Create a data frame for each matrix file in the current subfolder
+  for (matrix_file in t_files) {
+    # Extract the trial number from the file name
+    trial <- as.numeric(sub(".*T_0*(\\d+)\\.CSV", "\\1", basename(matrix_file)))
+  
+    # Read the matrix data
+    matrix_data <- as.data.frame(matrix_file %>% lapply(read_csv, show_col_types = FALSE))
+    
+    # Create a new column "Trial" with the extracted trial number
+    matrix_data$Trial <- trial
+    
+    # Combine data frames using rbind
+    allMatrixData <- rbind(allMatrixData, matrix_data)
+  }
+}
+
+# Convert columns to numeric, assuming they might be read as characters because of the NA's
+allMatrixData$EyeVelocity <- as.numeric(as.character(allMatrixData$EyeVelocity))
+allMatrixData$ScanPathDistance <- as.numeric(as.character(allMatrixData$ScanPathDistance))
+allMatrixData$DistanceFromAv <- as.numeric(as.character(allMatrixData$DistanceFromAv))
+allMatrixData$DistanceChangeSinceTrial <- as.numeric(as.character(allMatrixData$DistanceChangeSinceTrial))
+
+# Convert 'Timestamp' to POSIXct datetime format
+allMatrixData$Timestamp <- ymd_hms(allMatrixData$Timestamp)
+
+allMatrixData %<>% filter(!is.na(Timestamp))
+
+# Adding a seconds column
+allMatrixData <- allMatrixData %>%
+  group_by(PID, Race) %>%  # Group by both PID and Race
+  mutate(TimeSeconds = as.numeric(Timestamp - min(Timestamp))) %>%  # Calculate time in seconds
+  ungroup()  # Remove grouping afterward if needed
+
+allMatrixData <- allMatrixData %>%
+  group_by(PID, Race) %>%                # Group by both PID and Race
+  mutate(
+    delta_time = c(0, diff(TimeSeconds)),         # Calculate time differences
+    delta_degrees = EyeVelocity * delta_time     # Calculate incremental degrees
+  ) %>%
+  ungroup()                              # Remove grouping afterward if needed
+
+# Summarize the data
+summary(allMatrixData)
+```
+
+### filtering out loss of tracking (NA's) and blinks (Blink) in eye tracking data 
+
+```{r}
+# Filter out NA values
+filteredMatrixData <- allMatrixData %>%
+  filter(!EyeMovementType %in% c('na','Blink'))
+
+summary(filteredMatrixData)
+```
+
+### adding column to determine when eye gaze movement type changes 
+
+```{r}
+# Add a logical column to identify where 'EyeMovementType' changes or the first row of each PID and Race
+filteredMatrixData %<>%
+  group_by(PID, Race) %>%
+  mutate(Change = EyeMovementType != lag(EyeMovementType, default=EyeMovementType[1]) | row_number() == 1) %>%
+  ungroup()
+```
+
+### adding participant race/match and Sex/match columns to data frames
+
+```{r}
+# Make a temp data frame
+tempdf <- preData
+# Convert ParRace to character for comparison
+tempdf$ParRace <- as.character(tempdf$ParRace)
+# Map the levels so that "Middle Eastern or North African" becomes "MiddleEast"
+tempdf$ParRace[tempdf$ParRace == "Middle Eastern or North African"] <- "MiddleEast"
+
+# Create a new column that will add the participants race matched by the PID
+allSurveyData$ParRace <- tempdf$ParRace[match(allSurveyData$PID, tempdf$PID)]
+allMatrixData$ParRace <- tempdf$ParRace[match(allMatrixData$PID, tempdf$PID)]
+filteredMatrixData$ParRace <- tempdf$ParRace[match(filteredMatrixData$PID, tempdf$PID)]
+
+# Create a new column to determine if the race matches
+allSurveyData$RaceMatch <- ifelse(allSurveyData$Race == allSurveyData$ParRace, TRUE, FALSE)
+allMatrixData$RaceMatch <- ifelse(allMatrixData$Race == allMatrixData$ParRace, TRUE, FALSE)
+filteredMatrixData$RaceMatch <- ifelse(filteredMatrixData$Race == filteredMatrixData$ParRace, TRUE, FALSE)
+
+# Create a new column that will add the participants Sex matched by the PID
+allSurveyData$ParSex <- tempdf$Sex[match(allSurveyData$PID, tempdf$PID)]
+allMatrixData$ParSex <- tempdf$Sex[match(allMatrixData$PID, tempdf$PID)]
+filteredMatrixData$ParSex <- tempdf$Sex[match(filteredMatrixData$PID, tempdf$PID)]
+
+# Convert Gender and ParSex to character for comparison
+allSurveyData$Gender <- as.character(allSurveyData$Gender)
+allSurveyData$ParSex <- as.character(allSurveyData$ParSex)
+allMatrixData$Gender <- as.character(allMatrixData$Gender)
+allMatrixData$ParSex <- as.character(allMatrixData$ParSex)
+filteredMatrixData$Gender <- as.character(filteredMatrixData$Gender)
+filteredMatrixData$ParSex <- as.character(filteredMatrixData$ParSex)
+
+# Create a new column to determine if the Sex matches
+allSurveyData$SexMatch <- ifelse(allSurveyData$Gender == allSurveyData$ParSex, TRUE, FALSE)
+allMatrixData$SexMatch <- ifelse(allMatrixData$Gender == allMatrixData$ParSex, TRUE, FALSE)
+filteredMatrixData$SexMatch <- ifelse(filteredMatrixData$Gender == filteredMatrixData$ParSex, TRUE, FALSE)
+```
+
+### outputting the data to CSVs
+
+```{r, warning=FALSE, message=FALSE, eval=FALSE}
+write.csv(allSurveyData, "Exports/allSurveyData.CSV", row.names = FALSE)
+
+write.csv(allMatrixData, "Exports/allMatrixData.CSV", row.names = FALSE)
+
+write.csv(filteredMatrixData, "Exports/filteredMatrixData.CSV", row.names = FALSE)
+```
+
+## Factoring the given data
+```{r}
+# List of column names to factor
+cols_to_factor <- c("PID","Gender","Race","Script","Pitch","Collider","EyeMovementType","Trial","ParRace","RaceMatch","ParSex","SexMatch")
+
+# Factor the specified columns
+allMatrixData[cols_to_factor] <- lapply(allMatrixData[cols_to_factor], as.factor)
+filteredMatrixData[cols_to_factor] <- lapply(filteredMatrixData[cols_to_factor], as.factor)
+allSurveyData[cols_to_factor[c(1:5,9:12)]] <- lapply(allSurveyData[cols_to_factor[c(1:5,9:12)]], as.factor)
+
+# Changing the mapping values and factoring column
+allSurveyData$GuessGroup[allSurveyData$GuessGroup == "Middle Eastern or North African"] <- "MiddleEast"
+allSurveyData$GuessGroup[allSurveyData$GuessGroup == "Hispanic Latino or Spanish origin"] <- "Hispanic"
+allSurveyData$GuessGroup[allSurveyData$GuessGroup == "Black or African American"] <- "Black"
+allSurveyData$GuessGroup[allSurveyData$GuessGroup == "American Indian or Alaska Native"] <- "Native American"
+allSurveyData$GuessGroup[allSurveyData$GuessGroup == "Native Hawaiian or Other Pacific Islander"] <- "Pacific Islander"
+
+allSurveyData[c("GuessGen","GuessGroup")] <- lapply(allSurveyData[c("GuessGen","GuessGroup")], as.factor)
+```
+
+# Data Analysis
+
+## Preliminary analysis
+
+### Frames per second
+
+```{r}
+# Group by PID and trial, then calculate the frames per second based on time difference and total frames
+fps_data <- allMatrixData %>%
+  group_by(PID, Trial) %>%
+  summarise(
+    first_frame_time = min(Timestamp),         # Get the time of the first frame
+    last_frame_time = max(Timestamp),          # Get the time of the last frame
+    total_frames = n()                         # Count the total number of rows (frames)
+  ) %>%
+  mutate(
+    duration_secs = as.numeric(difftime(last_frame_time, first_frame_time, units = "secs")),
+    avg_fps = total_frames / duration_secs
+  ) %>%
+  ungroup()
+
+# Print the results
+cat("Average frames per second:", round(mean(fps_data$avg_fps, na.rm = TRUE),2), "\n")
+
+# Cleaning up
+rm(fps_data)
+```
+
+### NA's and Blinks removed
+
+```{r}
+# Find what percentage of the data frames are NAs and Blinks
+total_rows <- nrow(allMatrixData)
+# Calculate the proportion for 'na'
+cat("Proportion of 'na's:", (sum(allMatrixData$EyeMovementType == 'na') / total_rows)*100, "%\n")
+# Calculate the proportion for 'Blink'
+cat("Proportion of 'Blink's:", (sum(allMatrixData$EyeMovementType == 'Blink') / total_rows)*100, "%\n")
+```
+
+### Randomization Check
+
+```{r}
+checkchi <- allMatrixData %>%
+  distinct(PID, Script, Race)
+
+# Seeing if there is a relationship with the race and script
+contingency_table <- table(checkchi$Race, checkchi$Script)
+# Perform Chi-Square Test
+chisq_test <- chisq.test(contingency_table)
+# View the results
+chisq_test
+
+checkchi <- allMatrixData %>%
+  distinct(PID, Script, Pitch)
+
+# Seeing if there is a relationship with the race and script
+contingency_table <- table(checkchi$Script, checkchi$Pitch)
+# Perform Chi-Square Test
+chisq_test <- chisq.test(contingency_table)
+# View the results
+chisq_test
+
+checkchi <- allMatrixData %>%
+  distinct(PID, Race, Pitch)
+
+# Seeing if there is a relationship with the race and script
+contingency_table <- table(checkchi$Race, checkchi$Pitch)
+# Perform Chi-Square Test
+chisq_test <- chisq.test(contingency_table)
+# View the results
+chisq_test
+
+mosaicplot(contingency_table, main = "Mosaic Plot of Race and Pitch", shade = TRUE)
+
+# Cleaning up
+rm(contingency_table)
+rm(chisq_test)
+```
+
+# Colliders
+
+### Get relative dwell percentage for each collider by race and PID
+
+```{r}
+# Group by Race, Collider, and PID, then summarize to get total instances
+relative_dwell_wide <- allMatrixData %>%
+  group_by(Race, Collider, PID) %>%  # Added PID to the grouping
+  summarize(TotalInstances = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = Collider, values_from = TotalInstances, values_fill = list(TotalInstances = 0))
+
+# Drop the 'blink' column if necessary
+relative_dwell_wide <- relative_dwell_wide[-which(names(relative_dwell_wide) == "Blink")]
+
+# Calculate the total count for each row (excluding the Race and PID columns)
+row_totals <- rowSums(relative_dwell_wide[,-c(1, 2)])  # Excluding Race and PID
+
+# Convert counts to percentages of the row total
+relative_dwell_percentage <- relative_dwell_wide %>%
+  mutate(across(-c(Race, PID), ~ .x / row_totals * 100))
+
+# Print the result
+print(relative_dwell_percentage)
+
+# Step 1: Find rows where relative_dwell_percentage is the maximum across selected columns (excluding Race and PID)
+max_dwells <- apply(relative_dwell_percentage[,-c(1, 2)], 1, max)
+
+# Step 2: Calculate the mean of relative_dwell_percentage where it is the maximum
+mean_value <- mean(max_dwells)
+
+# Output the mean
+print(mean_value)
+
+# Convert from wide to long format (keeping PID in the data)
+relative_dwell_long <- pivot_longer(relative_dwell_percentage, 
+                cols = -c(Race, PID),  # Select all columns except 'Race' and 'PID' to pivot into long format
+                names_to = "Collider",  # Name of the new column for the 'Collider' categories
+                values_to = "Percentage")  # Name of the new column for the percentage values
+
+# Print the long format data frame
+print(relative_dwell_long)
+
+# List of column names to factor
+cols_to_factor <- c("Race", "Collider", "PID")
+
+# Factor the specified columns
+relative_dwell_long[cols_to_factor] <- lapply(relative_dwell_long[cols_to_factor], as.factor)
+
+# Summarize the data
+summary(relative_dwell_long)
+```
+
+
+### Plot the realtive dwell
+
+```{r}
+# Summarize the data needed
+summary_data <- relative_dwell_long %>%
+  group_by(Race, Collider) %>%
+  summarize(
+    Mean = mean(Percentage),
+    n = n(),
+    SE = sd(Percentage) / sqrt(n())
+  )
+
+plot_title <- "AOI Relative Dwell Time By VH Race"
+plot1 <- ggplot(summary_data, aes(x = Race, y = Mean/100, fill = Collider)) +  # Divide by 100 to convert percentages to proportions
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = (Mean - SE)/100, ymax = (Mean + SE)/100), 
+                position = position_dodge(width = 0.9), width = 0.8) +
+  scale_y_continuous(limits = c(0,0.5), labels = scales::percent, expand = c(0, 0)) + 
+  geom_vline(xintercept = c(1.5, 2.5, 3.5, 4.5), linetype = "solid", color = "black") +
+  labs(title = plot_title,
+       x = "VH Race",  # Update label as needed
+       y = "Percentage of Dwell Time") +
+  theme_minimal() +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 16),
+    legend.title = element_text(size=16),
+    legend.text = element_text(size=14)
+  )
+        
+my_plot <- plot1
+print(my_plot)
+# Use Cairo to save the plot to a PDF with embedded fonts
+CairoPDF(file = paste0("Exports/", gsub(" ", "_", plot_title), ".pdf"), width = 10, height = 5)
+print(my_plot)
+dev.off()  # Close the Cairo device
+```
+
+### analysis on the dwell percentages based on race (for each collider)
+
+```{r}
+# Check normality for each collider
+collider_cols <- unique(relative_dwell_long$Collider)
+for (collider in collider_cols) {
+  cat("Shapiro-Wilk test for Collider:", collider, "\n")
+  print(shapiro.test(relative_dwell_long$Percentage[relative_dwell_long$Collider == collider]))
+}
+
+# Perform Kruskal-Wallis test for each collider because data is non-normal
+kruskal_results <- lapply(collider_cols, function(collider) {
+  cat("\nKruskal-Wallis test for Collider:", collider, "\n")
+  print(kruskal.test(Percentage ~ Race, data = relative_dwell_long[relative_dwell_long$Collider == collider, ]))
+})
+
+dunn_test_result <- dunnTest(Percentage ~ Race, 
+                             data = relative_dwell_long[relative_dwell_long$Collider == "Forehead", ], 
+                             method = "holm")
+print(dunn_test_result)
+```
+
+### percent relative dwell by groups
+
+```{r}
+# Create a new dataframe and Filter out 'NoCollider'
+relative_dwell_long_Areas_NC <- relative_dwell_long %>% filter(Collider != "NoCollider")
+relative_dwell_long_Areas <- relative_dwell_long
+
+# Create a new categorical variable
+relative_dwell_long_Areas$AreaGroup <- ifelse(relative_dwell_long_Areas$Collider %in% c("BottomLip", "TopLip", "LeftEye", "RightEye", "Nose"), 
+                                        "Mouth Nose Eyes", 
+                                        "Other Areas")
+relative_dwell_long_Areas_NC$AreaGroup <- ifelse(relative_dwell_long_Areas_NC$Collider %in% c("BottomLip", "TopLip", "LeftEye", "RightEye", "Nose"), 
+                                        "Mouth Nose Eyes", 
+                                        "Other Areas")
+
+# Summarize total dwell time for each area group
+gaze_summary_NC <- relative_dwell_long_Areas_NC %>%
+  group_by(Race, PID, AreaGroup) %>%
+  summarize(TotalDwell = sum(Percentage), .groups = 'drop')
+
+gaze_summary <- relative_dwell_long_Areas %>%
+  group_by(Race, PID, AreaGroup) %>%
+  summarize(TotalDwell = sum(Percentage), .groups = 'drop')
+
+# View summary
+head(gaze_summary)
+```
+
+### analysis between mouth and eyes vs other colliders
+
+```{r}
+# Check normality for each group
+collider_groups <- unique(relative_dwell_long_Areas$AreaGroup)
+for (group in collider_groups) {
+  cat("Shapiro-Wilk test for Group:", group, "\n")
+  print(shapiro.test(relative_dwell_long_Areas$Percentage[relative_dwell_long_Areas$AreaGroup == group]))
+}
+
+# Reshape the data to wide format for paired test
+gaze_summary_wide <- gaze_summary  %>%
+  pivot_wider(names_from = AreaGroup, values_from = TotalDwell)
+gaze_summary_wide_NC <- gaze_summary_NC  %>%
+  pivot_wider(names_from = AreaGroup, values_from = TotalDwell)
+
+# Perform the Wilcoxon signed-rank test
+wilcox_test <- wilcox.test(gaze_summary_wide$`Mouth Nose Eyes`, 
+                           gaze_summary_wide$`Other Areas`, 
+                           paired = TRUE)
+
+# Print the result
+print(wilcox_test)
+
+# Calculate the means for each group
+mean_mouth_eyes <- mean(gaze_summary_wide$`Mouth Nose Eyes`)
+mean_other_areas <- mean(gaze_summary_wide$`Other Areas`)
+mean_other_areas_NC <- mean(gaze_summary_wide_NC$`Other Areas`)
+sd_mouth_eyes <- sd(gaze_summary_wide$`Mouth Nose Eyes`)
+sd_other_areas <- sd(gaze_summary_wide$`Other Areas`)
+sd_other_areas_NC <- sd(gaze_summary_wide_NC$`Other Areas`)
+
+cat(sprintf("Mean gaze percentage for Mouth, Nose, and Eyes: $M = %.2f$($SD = %.2f$)\n", mean_mouth_eyes, sd_mouth_eyes))
+cat(sprintf("Mean gaze percentage for Other Areas: $M = %.2f$($SD = %.2f$)\n", mean_other_areas, sd_other_areas))
+cat(sprintf("Mean gaze percentage for Other Areas (NC): $M = %.2f$($SD = %.2f$)\n", mean_other_areas_NC, sd_other_areas_NC))
+
+
+# only when NC is included, it is signficant
+# Sample size N (number of paired comparisons)
+N <- length(unique(relative_dwell_long$PID))
+
+# Extract V from the Wilcoxon test result
+V <- wilcox_test$statistic 
+
+# Calculate Z using the Wilcoxon formula
+Z <- (V - (N * (N + 1)) / 4) / sqrt((N * (N + 1) * (2 * N + 1)) / 24)
+
+# Calculate effect size r
+r <- Z / sqrt(N)
+
+# Print Z and r
+cat("Z-score (NC):", Z, "\n")
+cat("Effect size (r) (NC):", r, "\n")
+```
+
+### Overall face collider data (without 'NoCollider')
+
+```{r}
+# Summarize the data as you already have
+summary_data <- relative_dwell_long %>%
+  group_by(Collider) %>%
+  summarize(
+    Mean = mean(Percentage),
+    n = n(),
+    SE = sd(Percentage) / sqrt(n()),
+    TotalPercentage = sum(Percentage)  # Total percentage for each collider
+)
+
+print(summary_data)
+
+# Calculate the total percentage for all colliders including 'NoCollider'
+total_percentage_including_nocollider <- sum(summary_data$TotalPercentage)
+
+# Calculate the total percentage for all colliders except 'NoCollider'
+total_percentage_excluding_nocollider <- summary_data %>%
+  filter(Collider != "NoCollider") %>%
+  summarize(TotalExcludingNoCollider = sum(TotalPercentage)) %>%
+  pull(TotalExcludingNoCollider)
+
+# Calculate the percentage of total gaze excluding 'NoCollider'
+percentage_excluding_nocollider <- (total_percentage_excluding_nocollider / total_percentage_including_nocollider) * 100
+
+# Print the result
+cat("Percentage of gaze excluding 'NoCollider':", percentage_excluding_nocollider, "%\n")
+```
+
+
+
+# Getting 3 way Anovas ready for anaysis
+
+#### Funciton to remove outliers
+```{r}
+removeOutliers <- function(outlierCol, data, EyeMovementTypeFilter = NULL){
+  # copying the data frame to not mess with the original
+  withOutliersRemoved <- data
+  
+  # Filter by EyeMovementType if the optional parameter is provided
+  if (!is.null(EyeMovementTypeFilter) && "EyeMovementType" %in% colnames(withOutliersRemoved)) {
+    withOutliersRemoved <- withOutliersRemoved[withOutliersRemoved$EyeMovementType == EyeMovementTypeFilter, ]
+  }
+  else if (!is.null(EyeMovementTypeFilter) && "Type" %in% colnames(withOutliersRemoved)){
+    withOutliersRemoved <- withOutliersRemoved[withOutliersRemoved$Type == EyeMovementTypeFilter, ]
+  }
+  
+  origSize <- nrow(withOutliersRemoved)
+  totOutliRows <- 0
+  
+  # Calculate z-scores and remove outliers based on the column
+  z_scores <- (withOutliersRemoved[[outlierCol]] - mean(withOutliersRemoved[[outlierCol]], na.rm = TRUE)) / sd(withOutliersRemoved[[outlierCol]], na.rm = TRUE)
+  
+  # Identify and count outliers
+  outliers <- abs(z_scores) > 3
+  totOutliRows <- sum(outliers)
+  
+  # Exclude outliers from the dataframe
+  withOutliersRemoved <- withOutliersRemoved[!outliers, ]
+  
+  # Calculate the percentage of outliers removed
+  totOutliPercent <- round(100 * totOutliRows / origSize,2)
+  cat("% of outliers removed: ", totOutliPercent, "%\n")
+  
+  return(withOutliersRemoved)
+}
+```
+
+#### Funciton to conduct ANOVA
+```{r}
+anovaEyeTrack <- function(var, data, EyeMovementTypeFilter = NULL, ByVHRaceBlock = NULL) {
+  
+  # Check if EyeMovementType column exists in the data
+  if ("EyeMovementType" %in% colnames(data)) {
+    if (is.null(ByVHRaceBlock)) {
+      # Create the avg_data with EyeMovementType if the column exists
+      avg_data <- data %>%
+        group_by(PID, Race, RaceMatch, SexMatch, EyeMovementType) %>%  # Group by PID, Race, RaceMatch, SexMatch, and EyeMovementType
+        summarise(!!var := mean(.data[[var]], na.rm = TRUE)) %>%       # Calculate the mean of 'var'
+        ungroup()
+    } else{
+      # Create the avg_data with EyeMovementType if the column exists
+      avg_data <- data %>%
+        group_by(PID, Race, ParRace, EyeMovementType) %>%  # Group by PID, Race, EyeMovementType
+        summarise(!!var := mean(.data[[var]], na.rm = TRUE)) %>%       # Calculate the mean of 'var'
+        ungroup()
+    }
+    
+    # Filter by EyeMovementType if the optional parameter is provided
+    if (!is.null(EyeMovementTypeFilter)) {
+      avg_data <- avg_data[avg_data$EyeMovementType == EyeMovementTypeFilter, ]
+    }
+  } else {
+    # If EyeMovementType doesn't exist, skip it and group by other columns
+    avg_data <- data %>%
+      group_by(PID, Race, RaceMatch, SexMatch) %>%  # Group by PID, Race, RaceMatch, and SexMatch only
+      summarise(!!var := mean(.data[[var]], na.rm = TRUE)) %>%       # Calculate the mean of 'var'
+      ungroup()
+  }
+  
+  print(avg_data)
+  
+  # Null model
+  null_model <- lmer(as.formula(paste(var, "~ 1 + (1 | PID)")), data = avg_data, REML = FALSE)
+  if (is.null(ByVHRaceBlock)) {
+    # Full model with RaceMatch * SexMatch interaction
+    full_model <- lmer(as.formula(paste(var, "~ 1 + RaceMatch*SexMatch + (1 | PID)")), data = avg_data, REML = FALSE)
+  } else {
+    # Full model with VHRace and ParRace
+    full_model <- lmer(as.formula(paste(var, "~ 1 + ParRace + (1 | PID)")), data = avg_data, REML = FALSE)
+  }
+  
+  # Compare the null and full models using ANOVA
+  anova_result <- anova(null_model, full_model)
+  print(anova_result)
+  
+  print(summary(full_model))
+  # Diagnostic Plots
+  # Plot histogram of residuals
+  hist(residuals(full_model), main = paste("Histogram of Residuals for", var), xlab = "Residuals")
+  
+  # Plot residuals vs fitted values
+  plot(fitted(full_model), residuals(full_model), main = paste("Residuals vs Fitted for", var), 
+       xlab = "Fitted Values", ylab = "Residuals")
+  abline(h = 0, col = "red")
+  
+  # Generate Q-Q plot for normality of residuals
+  qqnorm(residuals(full_model), main = paste("Q-Q Plot of Residuals for", var))
+  qqline(residuals(full_model), col = "red")
+  
+  # Calculate and print ICC from the null model
+  icc_value <- icc(null_model)
+  print(sprintf("ICC for %s: %.2f", var, icc_value,2))
+  
+  # Getting and formatting the chi square statistic
+  chi_df <- anova_result[2,7]
+  chi_value <- anova_result[2,6]
+  chi_p_value <- ifelse(anova_result[2,8] < 0.001, 0.001, anova_result[2,8])
+  chi_p_sign <- ifelse(anova_result[2,8] < 0.001, "<", "=")
+  
+  if (chi_p_value < 0.05) {
+    sigText <- "offered"
+  } else {
+    sigText <- "did not offer"
+  }
+  
+  print(sprintf("The full model with all the fixed and random effects %s a significantly better fit to the data ($\\Delta\\chi^2(%.0f) = %.2f, p %s %.3f$) than the null model.", sigText, chi_df, chi_value, chi_p_sign, chi_p_value))
+  
+  # variance explained by the fixed effects (marginal) and both fixed and random effects (conditional)
+  r2_values <- r.squaredGLMM(full_model)
+  
+  # Extract conditional and marginal R^2 values
+  marginal_r2 <- round(r2_values[1],2)
+  conditional_r2 <- round(r2_values[2],2)
+  
+  print(sprintf("The full model explained %.0f\\%% (conditional $R^2 = %.2f$) of the variance in %s, while the null model only explained %.0f\\%% (marginal $R^2 = %.2f$).", conditional_r2 * 100, conditional_r2, var, marginal_r2 * 100, marginal_r2))
+  
+  tidy_summary <- tidy(full_model)
+  for(term in tidy_summary$term){
+    coefficient_info <- tidy_summary[tidy_summary$term == term, ]
+    
+    df_residual <- df.residual(full_model)
+    
+    beta <- coefficient_info$estimate
+    SE <- coefficient_info$std.error
+    t_value <- coefficient_info$statistic
+    p_value <- ifelse(coefficient_info$p.value < 0.001, 0.001, coefficient_info$p.value)
+    p_sign <- ifelse(coefficient_info$p.value < 0.001, "<", "=")
+    
+    if (!is.na(p_value) && p_value < 0.05) {
+      sigFig <- 2
+      while (round(beta, sigFig) == 0 || round(SE, sigFig) == 0) {
+        sigFig <- sigFig + 1
+      }
+      
+      beta_format <- paste0("%.", sigFig, "f")
+      SE_format <- paste0("%.", sigFig, "f")
+      formated_beta_SE <- sprintf(paste0(beta_format, ", SE = ", SE_format),beta,SE)
+      
+      factor <- (beta - 1) * 100
+      sigFig <- 0
+      while (round(factor, sigFig) == 0) {
+        sigFig <- sigFig + 1
+        factor <- (beta - 1) * 100
+      }
+      factor_format <- paste0("%.", sigFig, "f")
+      formated_factor <- sprintf(paste0(factor_format),factor)
+      
+      print(sprintf("%s ($\beta = %s, t(%.0d) = %.2f, p %s %.3f$) -- %s", term, formated_beta_SE, df_residual, t_value, p_sign, p_value, formated_factor))
+    } 
+    else if (!is.na(p_value)) {
+      print(sprintf("%s ($p = %.3f$)", term, p_value))
+    }
+  }
+  
+  model_summary <- summary(full_model)
+  
+  if (is.null(ByVHRaceBlock)) {
+    # Calculate EMMs and contrasts if significant
+    interaction_p <- model_summary$coefficients["RaceMatchTRUE:SexMatchTRUE", "Pr(>|t|)"]
+    racematch_p <- model_summary$coefficients["RaceMatchTRUE", "Pr(>|t|)"]
+    sexmatch_p <- model_summary$coefficients["SexMatchTRUE", "Pr(>|t|)"]
+    
+    if (interaction_p < 0.05 || (var == "EyeVelocity" && EyeMovementTypeFilter == "Saccade") || (var == "delta_degrees" && EyeMovementTypeFilter == "Saccade")) {
+      # Interaction effect is significant: calculate EMMs for the interaction
+      emm <- emmeans(full_model, ~ RaceMatch * SexMatch)
+      contrasts <- contrast(emm, method = "pairwise")
+      emm_df <- as.data.frame(emm)
+      return(list(emm_df = emm_df, contrasts = contrasts, effect_type = "interaction"))
+    } 
+    
+    if (sexmatch_p < 0.05) {
+        # Main effect of SexMatch is significant: calculate EMMs for SexMatch
+        emm <- emmeans(full_model, ~ SexMatch)
+        contrasts <- contrast(emm, method = "pairwise")
+        emm_df <- as.data.frame(emm)
+        return(list(emm_df = emm_df, contrasts = contrasts, effect_type = "main"))
+    }
+    
+    if (racematch_p < 0.05) {
+        # Main effect of RaceMatch is significant: calculate EMMs for RaceMatch
+        emm <- emmeans(full_model, ~ RaceMatch)
+        contrasts <- contrast(emm, method = "pairwise")
+        emm_df <- as.data.frame(emm)
+        return(list(emm_df = emm_df, contrasts = contrasts, effect_type = "main"))
+    }
+  } else{
+    # Check all coefficient names in the model
+    coef_names <- rownames(summary(full_model)$coefficients)
+    # Filter for terms related to ParRace
+    parrace_coeffs <- coef_names[grepl("^ParRace", coef_names)]
+    
+    # Calculate EMMs and contrasts if significant for each level of ParRace
+    for (level in parrace_coeffs) {
+      parrace_p <- summary(full_model)$coefficients[level, "Pr(>|t|)"]
+      if (parrace_p < 0.05) {
+        emm <- emmeans(full_model, ~ ParRace)
+        contrasts <- contrast(emm, method = "pairwise")
+        emm_df <- as.data.frame(emm)
+        print(emm_df)
+        print(contrasts)
+      }
+    }
+  }
+  
+  return(NULL)
+}
+```
+
+### Lists to store emms
+
+```{r}
+# holds the anova comparisons for all continuous variables
+anovaEyeTrackEmms <- list()
+# holds the anova comparisons for all fixation and saccade variables
+anovaEyeTrackEmmsFixSac <- list()
+```
+
+### Average fixation and saccade metrics by Race
+
+```{r}
+# Find the indices where changes occur
+change_indices <- which(filteredMatrixData$Change)
+
+# Initialize an empty data frame to store results for fixations and Saccades
+fixSacResults <- data.frame(PID = integer(), Race = character(), EyeMovementType = character(), TotalTime = numeric())
+
+result_list <- list()
+
+# Loop through indices where the gaze changes (goes up until the last index)
+for (i in seq_along(change_indices[-length(change_indices)])) {
+  # Print progress every 100 iterations
+  if (i %% 1000 == 0) {
+    cat("Iteration:", i, "/", length(change_indices), "\n")
+  }
+  
+  start_index <- change_indices[i]
+  
+  # Adjust end_index calculation to include the duration up to the change point, inclusive
+  # Makes sure the change is still within the same user and same trial
+  if (filteredMatrixData$PID[start_index] == filteredMatrixData$PID[change_indices[i + 1]] &&
+      filteredMatrixData$Trial[start_index] == filteredMatrixData$Trial[change_indices[i + 1]]) 
+  {
+    end_index <- change_indices[i + 1]
+  } 
+  else 
+  {
+    next
+  }
+
+  # Get categorical data relevant to the given row
+  pid <- filteredMatrixData$PID[start_index]
+  race <- filteredMatrixData$Race[start_index]
+  type <- filteredMatrixData$EyeMovementType[start_index]
+  
+  # Calculate accumulated time in milliseconds
+  totTime <- as.numeric(difftime(filteredMatrixData$Timestamp[end_index], filteredMatrixData$Timestamp[start_index], units = "secs")) * 1000
+  
+  # Bind new row to the fixSacResults DataFrame
+  result_list[[i]] <- data.frame(PID = pid, Race = race, EyeMovementType = type, TotalTime = totTime)
+}
+
+# Combine all rows efficiently at the end
+fixSacResults <- bind_rows(result_list)
+
+print(fixSacResults)
+```
+
+# Fixations
+
+### Fixation Velocity
+
+```{r}
+fv <- removeOutliers("EyeVelocity",filteredMatrixData,"Fixation")
+
+cat("Fixation Velocity (degrees / second)","\n")               
+round(mean(fv$EyeVelocity[fv$EyeMovementType == "Fixation"]),2)
+round(sd(fv$EyeVelocity[fv$EyeMovementType == "Fixation"]),2)
+
+anovaEyeTrackEmmsFixSac[["Fixation Velocity"]] <- anovaEyeTrack("EyeVelocity",fv,"Fixation")
+```
+
+### Fixation Counts
+
+```{r}
+fc <- removeOutliers("TotalTime",fixSacResults,"Fixation")
+
+# summarize the data to get means for each participant
+fc %<>% group_by(PID, Race, EyeMovementType) %>%
+  summarise(
+    typeCount = n()  # Count the number of rows for each combination of PID, Race, and Type
+  ) %>%
+  ungroup()
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+filteredInfo <- filteredMatrixData %>%
+  dplyr::select(PID, Race, RaceMatch, SexMatch) %>%
+  distinct()  # Ensure unique PIDs
+
+# Merge the columns from filteredMatrixData into the fc dataframe
+fc <- fc %>%
+  left_join(filteredInfo, by = c("PID","Race"))
+
+cat("Fixation Count","\n")
+round(mean(fc$typeCount[fc$EyeMovementType == "Fixation"]), 2)
+round(sd(fc$typeCount[fc$EyeMovementType == "Fixation"]), 2)
+
+anovaEyeTrackEmmsFixSac[["Fixations"]] <- anovaEyeTrack("typeCount",fc,"Fixation")
+```
+### Fixation Count by VH Race
+
+```{r}
+fcr <- removeOutliers("TotalTime",fixSacResults,"Fixation")
+
+# summarize the data to get means for each participant
+fcr %<>% group_by(PID, Race, EyeMovementType) %>%
+  summarise(
+    typeCount = n()  # Count the number of rows for each combination of PID, Race, and Type
+  ) %>%
+  ungroup()
+
+# Select only the relevant columns (PID, ParRace) from filteredMatrixData
+filteredInfo <- filteredMatrixData %>%
+  dplyr::select(PID, ParRace) %>%
+  distinct()  # Ensure unique PIDs
+
+# Merge the columns from filteredMatrixData into the fcr dataframe
+fcr <- fcr %>%
+  left_join(filteredInfo, by = c("PID"))
+
+# Itterates/ makes a subset to analyze by each VH race
+unique_races <- unique(fcr$Race)
+
+# List to store results for each subset
+anova_results <- list()
+
+# Loop through each unique race and perform ANOVA
+for (race in unique_races) {
+    # Subset the data for the current race
+    subset_data <- fcr[fcr$Race == race, ]
+    
+    # Check if the subset has enough data
+    if (nrow(subset_data) > 2) {
+        # Perform ANOVA
+        anova_result <- tryCatch({
+            aov(typeCount ~ ParRace, data = subset_data)
+        }, error = function(e) {
+            cat(sprintf("Error for Race: %s\n", race))
+            print(e)
+            return(NULL)
+        })
+        
+        # Store the result in the list
+        if (!is.null(anova_result)) {
+            anova_results[[race]] <- summary(anova_result)
+        }
+    } else {
+        cat(sprintf("Skipping Race: %s due to insufficient data.\n", race))
+    }
+}
+
+# Print results for each race
+for (race in names(anova_results)) {
+    cat(sprintf("\nANOVA Results for Race: %s\n", race))
+    print(anova_results[[race]])
+}
+
+
+
+
+# Summarize the data needed
+summary_data_fcr <- fcr %>%
+  group_by(ParRace, Race) %>%
+  summarize(
+    Mean = mean(typeCount),
+    n = n(),
+    SE = sd(typeCount) / sqrt(n())
+  )
+
+plot_title <- "Fixation Count By VH Race"
+plot1 <- ggplot(summary_data_fcr, aes(x = Race, y = Mean, fill = ParRace)) +  # Use raw counts directly
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = Mean - SE, ymax = Mean + SE), 
+                position = position_dodge(width = 0.9), width = 0.8) +
+  scale_y_continuous(limits = c(0, max(summary_data_fcr$Mean + summary_data_fcr$SE) + 15), expand = c(0, 0)) +  # Use raw counts
+  geom_vline(xintercept = c(1.5, 2.5, 3.5, 4.5), linetype = "solid", color = "black") +
+  labs(title = plot_title,
+       x = "VH Race",
+       y = "Fixation Count",
+       fill = "Participant Race") +  # Set legend title
+  theme_minimal() +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 26),
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 20),
+    legend.title = element_text(size = 20),
+    legend.text = element_text(size = 18),
+    legend.position = "none"
+  )
+        
+my_plot <- plot1
+print(my_plot)
+# Use Cairo to save the plot to a PDF with embedded fonts
+CairoPDF(file = paste0("Exports/", gsub(" ", "_", plot_title), ".pdf"), width = 8, height = 5)
+print(my_plot)
+dev.off()  # Close the Cairo device
+```
+
+### Fixation Duration
+
+```{r}
+fd <- removeOutliers("TotalTime",fixSacResults,"Fixation")
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+filteredInfo <- filteredMatrixData %>%
+  dplyr::select(PID, Race, RaceMatch, SexMatch) %>%
+  distinct()  # Ensure unique PIDs
+
+# Merge the columns from filteredMatrixData into the fc dataframe
+fd <- fd %>%
+  left_join(filteredInfo, by = c("PID","Race"))
+
+cat("Fixation Duration (milliseconds)","\n")
+round(mean(fd$TotalTime[fd$EyeMovementType == "Fixation"]),2)
+round(sd(fd$TotalTime[fd$EyeMovementType == "Fixation"]),2)
+
+anovaEyeTrackEmmsFixSac[["Fixation Duration"]] <- anovaEyeTrack("TotalTime",fd,"Fixation")
+```
+### Fixation Duration by VH Race
+
+```{r}
+fdr <- removeOutliers("TotalTime",fixSacResults,"Fixation")
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+filteredInfo <- filteredMatrixData %>%
+  dplyr::select(PID, ParRace) %>%
+  distinct()  # Ensure unique PIDs
+
+# Merge the columns from filteredMatrixData into the fdr dataframe
+fdr <- fdr %>%
+  left_join(filteredInfo, by = c("PID"))
+
+# Itterates/ makes a subset to analyze by each VH race
+unique_races <- unique(fdr$Race)
+
+# List to store results for each subset
+anova_results <- list()
+
+# Summarize the data needed
+summary_fdr <- fdr %>%
+  group_by(PID, Race) %>%
+  summarize(
+     TotalTime = mean(TotalTime)
+  ) %>% 
+  ungroup()
+
+summary_fdr <- summary_fdr %>%
+  left_join(filteredInfo, by = c("PID"))
+
+# Loop through each unique race and perform ANOVA
+for (race in unique_races) {
+    # Subset the data for the current race
+    subset_data <- summary_fdr[summary_fdr$Race == race, ]
+    
+    # Check if the subset has enough data
+    if (nrow(subset_data) > 2) {
+        # Perform ANOVA
+        anova_result <- tryCatch({
+            aov(TotalTime ~ ParRace, data = subset_data)
+        }, error = function(e) {
+            cat(sprintf("Error for Race: %s\n", race))
+            print(e)
+            return(NULL)
+        })
+        
+        # Store the result in the list
+        if (!is.null(anova_result)) {
+            anova_results[[race]] <- summary(anova_result)
+        }
+    } else {
+        cat(sprintf("Skipping Race: %s due to insufficient data.\n", race))
+    }
+}
+
+# Print results for each race
+for (race in names(anova_results)) {
+    cat(sprintf("\nANOVA Results for Race: %s\n", race))
+    print(anova_results[[race]])
+}
+
+
+
+
+# Summarize the data needed
+summary_data_fdr <- fdr %>%
+  group_by(ParRace, Race) %>%
+  summarize(
+    Mean = mean(TotalTime),
+    n = n(),
+    SE = sd(TotalTime) / sqrt(n())
+  ) %>% 
+  ungroup()
+
+plot_title <- "Fixation Duration By VH Race"
+plot1 <- ggplot(summary_data_fdr, aes(x = Race, y = Mean, fill = ParRace)) +  # Use raw counts directly
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = Mean - SE, ymax = Mean + SE), 
+                position = position_dodge(width = 0.9), width = 0.8) +
+  scale_y_continuous(limits = c(0, max(summary_data_fdr$Mean + summary_data_fdr$SE) + 15), expand = c(0, 0)) +  # Use raw counts
+  geom_vline(xintercept = c(1.5, 2.5, 3.5, 4.5), linetype = "solid", color = "black") +
+  labs(title = plot_title,
+       x = "VH Race",
+       y = "Fixation Duration (milliseconds)",
+       fill = "Participant Race") +  # Set legend title
+  theme_minimal() +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 26),
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 20),
+    legend.title = element_text(size = 20),
+    legend.text = element_text(size = 18),
+    legend.position = "none"
+  )
+        
+my_plot <- plot1
+print(my_plot)
+# Use Cairo to save the plot to a PDF with embedded fonts
+CairoPDF(file = paste0("Exports/", gsub(" ", "_", plot_title), ".pdf"), width = 8, height = 5)
+print(my_plot)
+dev.off()  # Close the Cairo device
+```
+
+
+# Saccades
+
+### Saccade Velocity
+
+```{r}
+sv <- removeOutliers("EyeVelocity",filteredMatrixData,"Saccade")
+
+cat("Saccade Velocity (degrees / second)","\n")
+round(mean(sv$EyeVelocity[sv$EyeMovementType == "Saccade"]),2)
+round(sd(sv$EyeVelocity[sv$EyeMovementType == "Saccade"]),2)
+
+anovaEyeTrackEmmsFixSac[["Saccade Velocity"]] <- anovaEyeTrack("EyeVelocity",sv,"Saccade")
+```
+### Saccade Counts
+
+```{r}
+sc <- removeOutliers("TotalTime",fixSacResults,"Saccade")
+
+# summarize the data to get means for each participant
+sc %<>% group_by(PID, Race, EyeMovementType) %>%
+  summarise(
+    typeCount = n()  # Count the number of rows for each combination of PID, Race, and Type
+  ) %>%
+  ungroup()
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+filteredInfo <- filteredMatrixData %>%
+  dplyr::select(PID, Race, RaceMatch, SexMatch) %>%
+  distinct()  # Ensure unique PIDs
+
+# Merge the columns from filteredMatrixData into the sc dataframe
+sc <- sc %>%
+  left_join(filteredInfo, by = c("PID","Race"))
+
+cat("Saccade Count","\n")
+round(mean(sc$typeCount[sc$EyeMovementType == "Saccade"]), 2)
+round(sd(sc$typeCount[sc$EyeMovementType == "Saccade"]), 2)
+
+anovaEyeTrackEmmsFixSac[["Saccades"]] <- anovaEyeTrack("typeCount",sc,"Saccade")
+```
+
+### Saccade Duration
+
+```{r}
+sd <- removeOutliers("TotalTime",fixSacResults,"Saccade")
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+filteredInfo <- filteredMatrixData %>%
+  dplyr::select(PID, Race, RaceMatch, SexMatch) %>%
+  distinct()  # Ensure unique PIDs
+
+# Merge the columns from filteredMatrixData into the sd dataframe
+sd <- sd %>%
+  left_join(filteredInfo, by = c("PID","Race"))
+
+cat("Saccade Duration (milliseconds)","\n")
+round(mean(sd$TotalTime[sd$EyeMovementType == "Saccade"]),2)
+round(sd(sd$TotalTime[sd$EyeMovementType == "Saccade"]),2)
+
+anovaEyeTrackEmmsFixSac[["Saccade Duration"]] <- anovaEyeTrack("TotalTime",sd,"Saccade")
+```
+
+### Saccade Amplitude
+
+```{r}
+sa <- removeOutliers("delta_degrees",filteredMatrixData,"Saccade")
+
+cat("Saccade Amplitude (degrees)","\n")
+round(mean(sa$delta_degrees[sa$EyeMovementType == "Saccade"]),2)
+round(sd(sa$delta_degrees[sa$EyeMovementType == "Saccade"]),2)
+
+anovaEyeTrackEmmsFixSac[["Saccade Amplitude"]] <- anovaEyeTrack("delta_degrees",sa,"Saccade")
+```
+### Saccade Amplitude by VH Race
+
+```{r}
+sar <- removeOutliers("delta_degrees",filteredMatrixData,"Saccade")
+
+# summarize the data to get means for each participant
+sar %<>% dplyr::select(PID, Race, delta_degrees, ParRace)
+
+# Itterates/ makes a subset to analyze by each VH race
+unique_races <- unique(sar$Race)
+
+# List to store results for each subset
+anova_results <- list()
+
+# Summarize the data needed
+summary_sar <- sar %>%
+  group_by(PID, Race) %>%
+  summarize(
+     delta_degrees = mean(delta_degrees)
+  ) %>% 
+  ungroup()
+
+summary_sar <- summary_sar %>%
+  left_join(filteredInfo, by = c("PID"))
+
+# Loop through each unique race and perform ANOVA
+for (race in unique_races) {
+    # Subset the data for the current race
+    subset_data <- summary_sar[summary_sar$Race == race, ]
+    
+    # Check if the subset has enough data
+    if (nrow(subset_data) > 2) {
+        # Perform ANOVA
+        anova_result <- tryCatch({
+            aov(delta_degrees ~ ParRace, data = subset_data)
+        }, error = function(e) {
+            cat(sprintf("Error for Race: %s\n", race))
+            print(e)
+            return(NULL)
+        })
+        
+        # Store the result in the list
+        if (!is.null(anova_result)) {
+            anova_results[[race]] <- summary(anova_result)
+        }
+    } else {
+        cat(sprintf("Skipping Race: %s due to insufficient data.\n", race))
+    }
+}
+
+
+# Print results for each race
+for (race in names(anova_results)) {
+    cat(sprintf("\nANOVA Results for Race: %s\n", race))
+    print(anova_results[[race]])
+}
+
+
+
+# Summarize the data needed
+summary_data_sar <- sar %>%
+  group_by(ParRace, Race) %>%
+  summarize(
+    Mean = mean(delta_degrees),
+    n = n(),
+    SE = sd(delta_degrees) / sqrt(n())
+  )
+
+plot_title <- "Saccade Amplitude By VH Race"
+plot1 <- ggplot(summary_data_sar, aes(x = Race, y = Mean, fill = ParRace)) +  # Use raw counts directly
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = Mean - SE, ymax = Mean + SE), 
+                position = position_dodge(width = 0.9), width = 0.8) +
+  scale_y_continuous(limits = c(0, max(summary_data_sar$Mean + summary_data_sar$SE) + 0.3), expand = c(0, 0)) +  # Use raw counts
+  geom_vline(xintercept = c(1.5, 2.5, 3.5, 4.5), linetype = "solid", color = "black") +
+  labs(title = plot_title,
+       x = "VH Race",
+       y = "Saccade Amplitude (degrees)",
+       fill = "Participant Race") +  # Set legend title
+  theme_minimal() +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 26),
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 20),
+    legend.title = element_text(size = 20),
+    legend.text = element_text(size = 18),
+    legend.position = "right"
+  )
+        
+my_plot <- plot1
+print(my_plot)
+# Use Cairo to save the plot to a PDF with embedded fonts
+CairoPDF(file = paste0("Exports/", gsub(" ", "_", plot_title), ".pdf"), width = 10, height = 5)
+print(my_plot)
+dev.off()  # Close the Cairo device
+```
+
+# Scanpath Distance
+
+```{r}
+# Convert ScanPathDistance from meters to millimeters
+filteredMatrixData$ScanPathDistance <- filteredMatrixData$ScanPathDistance * 1000
+
+# Remove outliers
+sDis <- removeOutliers("ScanPathDistance", filteredMatrixData)
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+sDis %<>% dplyr::select(PID, Race, RaceMatch, SexMatch, ScanPathDistance) %>%
+  distinct()  # Ensure unique PIDs
+
+# Output the mean and standard deviation
+cat("Scanpath Distance (millimeters)", "\n")
+round(mean(sDis$ScanPathDistance), 2)
+round(sd(sDis$ScanPathDistance), 2)
+
+anovaEyeTrackEmms[["Scanpath Distance"]] <- anovaEyeTrack("ScanPathDistance",sDis)
+```
+
+# Head Movement
+
+### Head Velocity
+
+```{r}
+hv <- removeOutliers("CameraVelocity",filteredMatrixData)
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+hv %<>% dplyr::select(PID, Race, RaceMatch, SexMatch, CameraVelocity) %>%
+  distinct()  # Ensure unique PIDs
+
+cat("Head Velocity (meters / second)","\n")
+round(mean(hv$CameraVelocity),2)
+round(sd(hv$CameraVelocity),2)
+
+anovaEyeTrackEmms[["Head Velocity"]] <- anovaEyeTrack("CameraVelocity",hv)
+```
+
+### Distance from Virtual Human
+
+```{r}
+vhDis <- removeOutliers("DistanceFromAv",filteredMatrixData)
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+vhDis %<>% dplyr::select(PID, Race, RaceMatch, SexMatch, DistanceFromAv) %>%
+  distinct()  # Ensure unique PIDs
+
+cat("Distance from Virtual Human (meters)","\n")
+round(mean(vhDis$DistanceFromAv),2)
+round(sd(vhDis$DistanceFromAv),2)
+
+anovaEyeTrackEmms[["Distance from VH"]] <- anovaEyeTrack("DistanceFromAv",vhDis)
+```
+
+### means and standard deviations of all eye gaze measures broken down for each race
+
+```{r}
+# Calculate the average values and standard deviation for each Race
+mean_sd_values <- filteredMatrixData %>%
+  group_by(Race) %>%
+  summarise(
+    FixationVelocity = paste0(round(mean(EyeVelocity[EyeMovementType == "Fixation"]), 2), " (", 
+                             round(sd(EyeVelocity[EyeMovementType == "Fixation"]), 2), ")"),
+    SaccadeVelocity = paste0(round(mean(EyeVelocity[EyeMovementType == "Saccade"]), 2), " (", 
+                             round(sd(EyeVelocity[EyeMovementType == "Saccade"]), 2), ")"),
+    ScanPathDistance = paste0(round(mean(ScanPathDistance)*100, 2), " (", 
+                             round(sd(ScanPathDistance)*100, 2), ")"),
+    DistanceMovedFromVH = paste0(round(mean(DistanceFromAv), 2), " (", 
+                                round(sd(DistanceFromAv), 2), ")"),
+    HeadVelocity = paste0(round(mean(CameraVelocity), 2), " (", 
+                            round(sd(CameraVelocity), 2), ")")
+  ) %>%
+  ungroup()
+
+# durations
+mean_sd_durations <- fixSacResults %>%
+  group_by(Race) %>%
+  summarise(
+    FixationDuration = paste0(round(mean(TotalTime[EyeMovementType == "Fixation"]), 2), " (", 
+                             round(sd(TotalTime[EyeMovementType == "Fixation"]), 2), ")"),
+    SaccadeDuration = paste0(round(mean(TotalTime[EyeMovementType == "Saccade"]), 2), " (", 
+                             round(sd(TotalTime[EyeMovementType == "Saccade"]), 2), ")")
+  )%>%
+  ungroup()
+
+# counts
+mean_sd_counts <- fixSacResults %>%
+  filter(EyeMovementType %in% c("Fixation", "Saccade")) %>%
+  group_by(PID, Race, EyeMovementType) %>%
+  summarise(Count = n()) %>%
+  group_by(Race) %>%
+  summarise(
+    FixationCount = paste0(round(mean(Count[EyeMovementType == "Fixation"]), 2), " (", 
+                             round(sd(Count[EyeMovementType == "Fixation"]), 2), ")"),
+    SaccadeCount = paste0(round(mean(Count[EyeMovementType == "Saccade"]), 2), " (", 
+                             round(sd(Count[EyeMovementType == "Saccade"]), 2), ")")
+  ) %>%
+  ungroup()
+
+# Ensure all 'Race' columns are character type to avoid any joining issues
+mean_sd_values$Race <- as.character(mean_sd_values$Race)
+mean_sd_durations$Race <- as.character(mean_sd_durations$Race)
+mean_sd_counts$Race <- as.character(mean_sd_counts$Race)
+
+# Join mean_sd_values with mean_sd_durations by 'Race'
+combined_data <- mean_sd_values %>%
+  left_join(mean_sd_durations, by = "Race")
+
+# Join the result with mean_sd_counts by 'Race'
+combined_data <- combined_data %>%
+  left_join(mean_sd_counts, by = "Race")
+
+# View the final combined table
+print(combined_data)
+```
+# Accuracy Checks
+
+### Race and Sex Accuracy 
+```{r}
+# Chi-square test for Sex accuracy
+chisq.test(table(allSurveyData$Gender, allSurveyData$GuessGen))
+
+# Calculate accuracy for Sex
+Sex_table <- table(allSurveyData$Gender, allSurveyData$GuessGen)
+Sex_accuracy <- sum(diag(Sex_table)) / sum(Sex_table)  # Proportion of correct guesses
+print(Sex_accuracy)
+
+
+# Monte Carlo Approximation for Chi-Square Test
+chisq.test(table(allSurveyData$Race, allSurveyData$GuessGroup), simulate.p.value = TRUE)
+
+# Calculate accuracy for race
+race_table <- table(allSurveyData$Race, allSurveyData$GuessGroup)
+race_accuracy <- sum(diag(race_table)) / sum(race_table)  # Proportion of correct guesses
+print(race_table)
+print(race_accuracy)
+```
+
+
+### Answer Accuracy
+
+```{r}
+# Convert TopicQuesCorr to a percentage out of 4
+aa <- allSurveyData %>%
+  mutate(TopicQuesCorr = (TopicQuesCorr / 4) * 100)
+
+# Select only the relevant columns (PID, RaceMatch, SexMatch) from filteredMatrixData
+aa %<>% dplyr::select(PID, Race, RaceMatch, SexMatch, TopicQuesCorr) %>%
+  distinct()  # Ensure unique PIDs
+
+cat("Answer Accuracy","\n")
+round(mean(aa$TopicQuesCorr),2)
+round(sd(aa$TopicQuesCorr),2)
+
+anovaEyeTrackEmms[["Answer Accuracy"]] <- anovaEyeTrack("TopicQuesCorr",aa)
+```
+
+### Summarizing answer accuracy data
+
+```{r}
+# Step 1: Aggregate fixations and saccades by PID from fixSacResults
+fix_sac_data <- fixSacResults %>%
+  group_by(PID, Race, EyeMovementType) %>%
+  summarize(TotalTime = sum(TotalTime), .groups = 'drop') %>%
+  pivot_wider(names_from = EyeMovementType, values_from = TotalTime, values_fill = list(TotalTime = 0))
+
+# Rename columns to NumFixations and NumSaccades for clarity
+fix_sac_data <- fix_sac_data %>%
+  rename(NumFixations = Fixation, NumSaccades = Saccade)
+
+# Step 2: Merge the two datasets by PID
+merged_data <- aa %>%
+  left_join(fix_sac_data, by = c("PID","Race"))
+
+# Step 3: Print the final table
+head(merged_data)
+```
+
+### Conducting linear mixed effects model to see if answer accuracy can be predicted by fixations or saccades
+
+```{r}
+scaled_data <- merged_data %>%
+  mutate(across(c(TopicQuesCorr, NumFixations, NumSaccades), ~ (.x - min(.x)) / (max(.x) - min(.x))))
+
+null_model <- lmer(TopicQuesCorr ~ 1 + (1 | PID), data = scaled_data, REML = FALSE)
+full_model <- lmer(TopicQuesCorr ~ 1 + NumFixations + NumSaccades + (1|PID), data = scaled_data, REML = FALSE)
+summary(full_model)
+
+# Calculate and print ICC from the null model
+icc_value <- icc(null_model)
+print(paste("ICC for answer accuracy:", round(icc_value,2)))
+
+# Getting and formaitng the chi square statistic
+chiRes <- anova(full_model, null_model)
+
+chi_df <- chiRes[2,7]
+chi_value <- chiRes[2,6]
+chi_p_value <- ifelse(chiRes[2,8] < 0.001, 0.001, chiRes[2,8])
+chi_p_sign <- ifelse(chiRes[2,8] < 0.001, "<", "=")
+
+if (chi_p_value < 0.05) {
+  sigText <- "offered"
+} else {
+  sigText <- "did not offer"
+}
+
+print(sprintf("The full model with all the fixed and random effects %s a significantly better fit to the data ($\\Delta\\chi^2(%.0f) = %.2f$, $p %s %.3f$) than the null model.", sigText, chi_df, chi_value, chi_p_sign, chi_p_value))
+
+
+# % explained by the variance of the fixed effects (marginal)
+# and both fixed and random effects (conditional)
+r2_values <- r.squaredGLMM(full_model)
+
+# Extract conditional and marginal R^2 values
+marginal_r2 <- round(r2_values[1],3)
+conditional_r2 <- round(r2_values[2],3)
+
+print(sprintf("The full model explained %.0f\\%% (conditional $R^2 = %.3f$) of the variance in answer accuracy, while the null model only explained %.0f\\%% (marginal $R^2 = %.3f$).", conditional_r2 * 100, conditional_r2, marginal_r2 * 100, marginal_r2))
+
+tidy_summary <- tidy(full_model)
+
+tidy_summary <- tidy_summary %>%
+  filter(effect == "fixed")
+print(tidy_summary)
+
+for(term in tidy_summary$term){
+  coefficient_info <- tidy_summary[tidy_summary$term == term, ]
+  
+  df_residual <- df.residual(full_model)
+  
+  # Extract coefficient details
+  beta <- coefficient_info$estimate
+  SE <- coefficient_info$std.error
+  t_value <- coefficient_info$statistic
+  p_value <- ifelse(coefficient_info$p.value < 0.001, 0.001, coefficient_info$p.value)
+  p_sign <- ifelse(coefficient_info$p.value < 0.001, "<", "=")
+  
+  # Conditional formatting for significant results
+  if (!is.na(p_value) && p_value < 0.05) {
+    sigFig <- 2
+    while (round(beta, sigFig) == 0 || round(SE, sigFig) == 0) {
+      sigFig <- sigFig + 1
+    }
+    
+    beta_format <- paste0("%.", sigFig, "f")
+    SE_format <- paste0("%.", sigFig, "f")
+    formated_beta_SE <- sprintf(paste0(beta_format, ", SE = ", SE_format), beta, SE)
+    
+    print(sprintf("%s ($\\beta = %s$, $t(%.0d) = %.2f$, $p %s %.3f$)", 
+                  term, formated_beta_SE, df_residual, t_value, p_sign, p_value))
+    
+  } else if (!is.na(p_value)) {
+    print(sprintf("%s ($p = %.3f$)", term, p_value))
+  }
+}
+
+# Create the plot title
+original_plot_title <- paste("Effect of Fixations on Answer Accuracy")
+  
+# Correct plot reflecting the lmer model with scaled fixations
+fixPlot <- ggplot(scaled_data, aes(x = NumFixations, y = TopicQuesCorr)) +
+  geom_smooth(method = "lm", se = TRUE, color = "#59A14F", size = 1.5, fill = "lightblue", alpha = 0.25) +
+  labs(title = original_plot_title,  # Title indicating scaled fixations
+       x = "Number of Fixations (relatively scaled)",  # Reflecting that Fixations are scaled
+       y = "Answer Accuracy"              # Keep the y-axis as "Answer Accuracy" if it's not scaled
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    panel.grid.major = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white"),
+    axis.line = element_line(color = "black"),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 16),
+    legend.position = "none"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.1)))  # Ensure y-axis (accuracy) is scaled correctly
+
+plot(fixPlot)
+
+# Save the plot as a PDF
+CairoPDF(file = paste0("Exports/", gsub(" ", "_", original_plot_title), ".pdf"), width = 8, height = 5)
+print(fixPlot)
+dev.off()  # Close the Cairo device
+```
+
+# Subjective Ratings
+
+### Survey Data analysis
+
+```{r}
+# Initialize an empty list to store the transformed contrasts data frames
+models_list <- list()
+
+fit_survey_models <- function(var, data) {
+  print(sprintf("%s", var))
+  print(sprintf("mean: %.2f",mean(data[[var]])))
+  print(sprintf("sd: %.2f",sd(data[[var]])))
+
+  null_model <- lmer(get(var) ~ 1 + (1 | PID), data = data, REML = FALSE)
+  full_model <- lmer(get(var) ~ 1 + RaceMatch*SexMatch + (1|PID), data = data, REML = FALSE)
+  model_summary <- summary(full_model)
+  # print(model_summary)
+  
+  # Calculate and print ICC from the null model
+  icc_value <- icc(null_model)
+  print(sprintf("ICC for %s: %.2f", var, icc_value))
+  
+  # Getting and formaitng the chi square statistic
+  chiRes <- anova(full_model, null_model)
+  
+  chi_df <- chiRes[2,7]
+  chi_value <- chiRes[2,6]
+  chi_p_value <- ifelse(chiRes[2,8] < 0.001, 0.001, chiRes[2,8])
+  chi_p_sign <- ifelse(chiRes[2,8] < 0.001, "<", "=")
+  
+  if (chi_p_value < 0.05) {
+    sigText <- "offered"
+  } else {
+    sigText <- "did not offer"
+  }
+  
+  print(sprintf("The full model with all the fixed and random effects %s a significantly better fit to the data ($\\Delta\\chi^2(%.0f) = %.2f$, $p %s %.3f$) than the null model.", sigText, chi_df, chi_value, chi_p_sign, chi_p_value))
+  
+  
+  # % explained by the variance of the fixed effects (marginal)
+  # and both fixed and random effects (conditional)
+  r2_values <- r.squaredGLMM(full_model)
+  
+  # Extract conditional and marginal R^2 values
+  marginal_r2 <- round(r2_values[1],3)
+  conditional_r2 <- round(r2_values[2],3)
+  
+  print(sprintf("The full model explained %.0f\\%% (conditional $R^2 = %.2f$) of the variance in %s, while the null model only explained %.0f\\%% (marginal $R^2 = %.2f$).", conditional_r2 * 100, conditional_r2, var, marginal_r2 * 100, marginal_r2))
+  
+  # Calculate EMMs and contrasts if significant
+  interaction_p <- model_summary$coefficients["RaceMatchTRUE:SexMatchTRUE", "Pr(>|t|)"]
+  racematch_p <- model_summary$coefficients["RaceMatchTRUE", "Pr(>|t|)"]
+  sexmatch_p <- model_summary$coefficients["SexMatchTRUE", "Pr(>|t|)"]
+  
+  if (interaction_p < 0.05 || var == "Trust") {
+    # Interaction effect is significant: calculate EMMs for the interaction
+    emm <- emmeans(full_model, ~ RaceMatch * SexMatch)
+    contrasts <- contrast(emm, method = "pairwise")
+    emm_df <- as.data.frame(emm)
+    return(list(emm_df = emm_df, contrasts = contrasts, effect_type = "interaction"))
+  } 
+  
+  if (sexmatch_p < 0.05) {
+      # Main effect of SexMatch is significant: calculate EMMs for SexMatch
+      emm <- emmeans(full_model, ~ SexMatch)
+      contrasts <- contrast(emm, method = "pairwise")
+      emm_df <- as.data.frame(emm)
+      return(list(emm_df = emm_df, contrasts = contrasts, effect_type = "main"))
+  }
+  
+  if (racematch_p < 0.05) {
+      # Main effect of RaceMatch is significant: calculate EMMs for RaceMatch
+      emm <- emmeans(full_model, ~ RaceMatch)
+      contrasts <- contrast(emm, method = "pairwise")
+      emm_df <- as.data.frame(emm)
+      return(list(emm_df = emm_df, contrasts = contrasts, effect_type = "main"))
+  }
+  
+  return(NULL)
+}
+
+allSurveyDataCopy <- allSurveyData
+
+# Extract relevant columns
+colsToEval <- colnames(allSurveyDataCopy)[c(11:18)]
+allSurveyDataCopy[colsToEval] <- lapply(allSurveyDataCopy[colsToEval], as.numeric)
+# Only grab relevant columns
+allSurveyDataCopy <- allSurveyDataCopy[c(1:3,11:18,20,22)]
+
+# Loop through each response variable and fit null and full models
+for (col in colsToEval) {
+  models_list[[col]] <- fit_survey_models(col, allSurveyDataCopy)  # Assuming `allSurveyData` is the correct dataset
+}
+```
+
+### Graphing the post hoc tests
+
+```{r}
+# "Bar" or "Point"
+printPlotType <- "Point"
+  
+graphEffects <- function(listVals, var){
+  
+  # Define a lookup for variable units
+  var_units <- list(
+    "Fixations" = "Number of Fixations",
+    "Fixation Velocity" = "Fixation Velocity (degrees/second)",
+    "Fixation Duration" = "Fixation Duration (milliseconds)",
+    "Saccades" = "Number of Saccades",
+    "Saccade Velocity" = "Saccade Velocity (degrees/second)",
+    "Saccade Duration" = "Saccade Duration (milliseconds)",
+    "Saccade Amplitude" = "Saccade Amplitude (degrees)",
+    "Scanpath Distance" = "Scanpath Distance (millimeters)",
+    "Head Velocity" = "Head Velocity (meters/second)",
+    "Distance from VH" = "Distance from VH (meters)"
+  )
+  
+  # Descriptive y-axis label based on the var key (including units)
+  y_axis_label <- var_units[[var]]  # Use units if available
+  if (is.null(y_axis_label)) {
+    y_axis_label <- var  # Fall back to the original variable name if no unit exists
+  }
+  
+  # Extract the data frame, contrasts, and effect type from the list
+  emm_df <- listVals$emm_df
+  contrasts <- listVals$contrasts
+  effect_type <- listVals$effect_type
+  
+  # Determine whether to use RaceMatch or SexMatch for the x-axis and fill
+  if ("RaceMatch" %in% names(emm_df)) {
+    x_axis_label <- "Race Concordance"
+    fill_var <- "RaceMatch"  # Fill by RaceMatch
+  } else if ("SexMatch" %in% names(emm_df)) {
+    x_axis_label <- "Sex Concordance"
+    fill_var <- "SexMatch"  # Fill by SexMatch
+  } else {
+    stop("No RaceMatch or SexMatch found in emm_df")
+  }
+  
+  # Check if the effect is "interaction" or "main"
+  if (effect_type == "interaction") {
+    if(printPlotType == "Bar"){
+      # Set the dynamic title
+      title_label <- paste("Race and Sex Concordance on", var)  # X by Y title
+      # Create a bar plot for interaction effects with error bars showing standard errors
+      interactPlot <- ggplot(emm_df, aes(x = factor(RaceMatch), y = emmean, fill = factor(SexMatch))) +
+        geom_bar(stat = "identity", position = "dodge") +  # Bar plot
+        geom_errorbar(aes(ymin = emmean - SE, ymax = emmean + SE),
+                      position = position_dodge(width = 0.9), width = 0.2) +  # Error bars showing standard error
+        labs(title = title_label,  # Dynamic title
+             x = x_axis_label,     # Dynamic x-axis label
+             y = y_axis_label,     # y-axis label with units
+             fill = "Sex Concordance") +  # Legend label for SexMatch
+        theme_minimal() +
+        theme_bw() +
+        theme(
+          plot.title = element_text(hjust = 0.5, size = 18),
+          axis.text = element_text(size = 14),
+          axis.title = element_text(size = 16),
+          legend.title = element_text(size = 16),
+          legend.text = element_text(size = 14)
+        )
+      print(interactPlot)
+      fileTitle <- gsub(" ", "_", paste(title_label,"Bar Graph"))
+    } 
+    else if (printPlotType == "Point"){
+      # Set the dynamic title
+      title_label <- paste("Race and Sex Concordance on", var)  # X by Y title
+      
+      # Determine size of text in the graphs
+      plot_title_size<- ifelse(var %in% c("Fixations", "Fixation Duration", "Saccade Amplitude"), 23, 18)
+      axis_text<- ifelse(var %in% c("Fixations", "Fixation Duration", "Saccade Amplitude"), 18, 14)
+      axis_title<- ifelse(var %in% c("Fixations", "Fixation Duration", "Saccade Amplitude"), 20, 16)
+      legend_title<- ifelse(var %in% c("Fixations", "Fixation Duration", "Saccade Amplitude"), 20, 16)
+      legend_text<- ifelse(var %in% c("Fixations", "Fixation Duration", "Saccade Amplitude"), 18, 14)
+      legend_position <- ifelse(var %in% c("Fixations", "Fixation Duration"), "none", "right")
+      plot_width <- ifelse(var %in% c("Fixations", "Fixation Duration"), 8, 10)
+      
+      # Create plot for interaction effects with error bars showing standard errors
+      interactPlot <- ggplot(emm_df, aes(x = RaceMatch, y = emmean, color = SexMatch, group = SexMatch)) +
+        geom_point(size = 3) +  # Plot points
+        geom_line(aes(group = SexMatch)) +  # Plot lines
+        geom_errorbar(aes(ymin = emmean - SE, ymax = emmean + SE), width = 0.2) +  # Error bars with standard error
+        labs(title = title_label,  # Dynamic title
+             x = x_axis_label,     # Dynamic x-axis label
+             y = y_axis_label,     # y-axis label with units
+             color = "Sex Concordance") +  # Legend label for SexMatch
+        theme_minimal() +
+        theme_bw() +
+        theme(
+          # Adjust numbers dynamically for smaller graphs
+          plot.title = element_text(hjust = 0.5, size = plot_title_size),
+          axis.text = element_text(size = axis_text),
+          axis.title = element_text(size = axis_title),
+          legend.title = element_text(size = legend_title),
+          legend.text = element_text(size = legend_text),
+          legend.position = legend_position
+        )
+      print(interactPlot)
+      fileTitle <- gsub(" ", "_", paste(title_label,"Point Graph"))
+    }
+    
+    # Save the plot as a PDF
+    CairoPDF(file = paste0("Exports/", fileTitle, ".pdf"), width = plot_width, height = 5)
+    print(interactPlot)
+    dev.off()  # Close the Cairo device
+    
+  } else if (effect_type == "main") {
+    
+    # Set the dynamic title
+    title_label <- paste(x_axis_label, "on", var)  # X by Y title
+    
+    # Create the main plot with error bars showing standard errors
+    mainPlot <- ggplot(emm_df, aes_string(x = fill_var, y = "emmean", fill = fill_var)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      geom_errorbar(aes(ymin = emmean - SE, ymax = emmean + SE), width = 0.2, position = position_dodge(0.9)) +  # Use SE for error bars
+      labs(title = title_label,  # Dynamic title
+           x = x_axis_label,     # Dynamic x-axis label
+           y = y_axis_label) +   # y-axis label with units
+      theme_minimal() +
+      theme_bw() +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 18),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        legend.position = "none"
+      )
+    
+    print(mainPlot)
+    
+    # Save the plot as a PDF
+    CairoPDF(file = paste0("Exports/", gsub(" ", "_", title_label), ".pdf"), width = 8, height = 5)
+    print(mainPlot)
+    dev.off()  # Close the Cairo device
+  } else {
+    cat("Unknown effect type. No plot generated.\n")
+  }
+}
+
+
+# Loop through all variables in the anovaEyeTrackEmms list and plot only for significant effects
+for (var in names(anovaEyeTrackEmms)) {
+  if (!is.null(anovaEyeTrackEmms[[var]])) {
+    graphEffects(anovaEyeTrackEmms[[var]], var)
+  } else {
+    cat(sprintf("No significant effects for %s. No plot generated.\n", var))
+  }
+}
+
+# Loop through all variables in the anovaEyeTrackEmmsFixSac list and plot only for significant effects
+for (var in names(anovaEyeTrackEmmsFixSac)) {
+  if (!is.null(anovaEyeTrackEmmsFixSac[[var]])) {
+    graphEffects(anovaEyeTrackEmmsFixSac[[var]], var)
+  } else {
+    cat(sprintf("No significant effects for %s. No plot generated.\n", var))
+  }
+}
+
+# Loop through all variables in the models_list and plot only for significant effects
+for (var in names(models_list)) {
+  if (!is.null(models_list[[var]])) {
+    graphEffects(models_list[[var]], var)
+  } else {
+    cat(sprintf("No significant effects for %s. No plot generated.\n", var))
+  }
+}
+```
+
+```{r, eval = FALSE}
+graphPostHocs <- function(emmDf, var){
+  tempEmms <- emmDf
+  
+  # Extract the terms and p-values
+  p_values <- tempEmms$pvalue
+  terms <- tempEmms$Term
+  
+  # Filter for significant terms (p < 0.05)
+  significant_indices <- p_values < 0.05
+  significant_terms <- terms[significant_indices]
+  significant_p_values <- p_values[significant_indices]
+  
+  # Create custom annotations for stars based on significance levels
+  annotations <- ifelse(significant_p_values < 0.001, "***",
+                        ifelse(significant_p_values < 0.01, "**",
+                               ifelse(significant_p_values < 0.05, "*", "")))
+  
+  # Check if there are any significant terms to plot
+  if (length(significant_terms) > 0) {
+    
+    # Adjust y-positions for annotations to avoid overlap
+    y_positions <- seq(from = 7.8, length.out = length(significant_terms), by = .8)
+    
+    # Set the plot title and y-axis label based on the variable
+    if (var == "Likable") {
+      plot_title <- "Likeability by Race"
+      yLab <- "Likeability"
+    } else {
+      plot_title <- paste(var, "by Race")
+      yLab <- var
+    }
+    
+    # Create the plot based on the variable and significant terms
+    my_plot <- ggplot(allSurveyDataCopy, aes_string(x = "Race", y = var, fill = "Race")) +
+      geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+      theme_minimal() +
+      labs(
+        title = plot_title,
+        x = "Race",
+        y = yLab
+      ) +
+      theme_bw() +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 18),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        legend.position = "none"
+      )
+    
+    # Add significance stars to the plot if there are significant terms
+    if (length(annotations) > 0) {
+      my_plot <- my_plot + 
+        geom_text(aes(x = significant_terms, y = y_positions, label = annotations), 
+                  vjust = -0.5, size = 5, color = "red")
+    }
+    
+    # Print the plot to the console
+    print(my_plot)
+    
+    # Save the plot as a PDF
+    CairoPDF(file = paste0("Exports/", gsub(" ", "_", plot_title), ".pdf"), width = 8, height = 5)
+    print(my_plot)
+    dev.off()  # Close the Cairo device
+    
+  } else {
+    print(paste("No significant comparisons for", var))
+  }
+}
+
+# Loop through the emm_list and generate plots for each variable
+for (var in names(emm_list)) {
+  graphPostHocs(emm_list[[var]], var)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+# Power analysis
+
+```{r, eval = FALSE}
+# power analysis
+
+# # Use MuMIn to compute R^2 values
+    # r2_values <- r.squaredGLMM(full_model)
+    # r2_marginal <- r2_values[1]  # Marginal R² (variance explained by fixed effects)
+    # 
+    # # Calculate effect size f2 based on R2 from the full model
+    # f2 <- r2_marginal / (1 - r2_marginal)
+    # 
+    # # Check if f2 is positive
+    # if (f2 > 0) {
+    #   # Calculate the required sample size for a linear model with 3 predictors
+    #   result <- pwr.f2.test(u = 3, f2 = f2, power = 0.8, sig.level = 0.05)
+    #   
+    #   # Extract and print the required number of participants
+    #   required_sample_size <- ceiling(result$v + result$u + 1)  # Adding predictors and intercept
+    #   # print(paste("The required sample size for", var, "is:", required_sample_size))
+    # } else {
+    #   # cat("The effect size (f²) could not be calculated as it is non-positive for", var, "\n")
+    # }
+```
+
+### Graph Struct
+```{r, eval=FALSE}
+tempEmm <- anovaEyeTrack(var, scDis)
+
+# Extract the p-values and comparisons
+p_values <- summary(tempEmm$contrasts)$p.value
+comparison_list <- strsplit(as.character(summary(tempEmm$contrasts)$contrast), " - ")
+
+# Filter for significant comparisons
+significant_indices <- p_values < 0.05
+comparison_list <- comparison_list[significant_indices]
+p_values <- p_values[significant_indices]
+
+# Create custom annotations for stars based on significance levels
+annotations <- ifelse(p_values < 0.001, "***",
+                      ifelse(p_values < 0.01, "**",
+                             ifelse(p_values < 0.05, "*", "")))
+
+# Adjust y-positions for annotations to avoid overlap
+y_positions <- seq(from = 103,  # Adjusted to reflect centimeters
+                   length.out = length(comparison_list), 
+                   by = .8)  # Adjusted based on new units
+
+plot_title <- "Saccade Duration by Race"
+summary(sacDur)
+# Create the plot
+ggplot(sacDur, aes_string(x = "Race", y = paste0(var), fill = "Race")) +  # Multiply by 100 for centimeters
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  theme_minimal() +
+  labs(
+    title = plot_title,
+    x = "Race",
+    y = "Saccade Duration (milliseconds)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 16),
+    legend.position = "none"
+  ) + 
+  coord_cartesian(ylim = c(0, 146)) +  # Adjusted ylim for centimeters
+  geom_signif(
+    comparisons = comparison_list,
+    annotations = annotations,
+    map_signif_level = FALSE,
+    y_position = y_positions,  # Use adjusted y-positions
+    textsize = 8,
+    vjust = .65, 
+    tip_length = .008
+  )
+
+# Use Cairo to save the plot to a PDF with embedded fonts
+CairoPDF(file = paste0("Exports/", gsub(" ", "_", plot_title), ".pdf"), width = 8, height = 5)
+last_plot()
+dev.off()  # Close the Cairo device
+```
+
+### sr^2 effect size for each term
+```{r, eval=FALSE}
+# Calculate semi-partial R^2 for each significant predictor
+  significant_terms <- tidy_summary$term[tidy_summary$p.value < 0.05 & tidy_summary$term != "(Intercept)" & tidy_summary$term != "<unknown>"]
+  for (term in significant_terms) {
+    # Construct the reduced formula
+    remaining_terms <- setdiff(c("NumFixations","NumSaccades"), term)
+    reduced_formula <- as.formula(paste("TopicQuesCorr ~ 1 +", paste(remaining_terms, collapse = " + "), "+ (1 | PID)"))
+    reduced_model <- lmer(reduced_formula, data = scaled_data, REML = TRUE)
+    
+    # Compare models using ANOVA
+    model_comparison <- anova(full_model, reduced_model)
+    chi_value_diff <- model_comparison$Chisq[2]
+    df_diff <- model_comparison$Df[2]
+    semi_partial_r2 <- chi_value_diff / (chi_value_diff + df_residual)
+    
+    print(sprintf("Semi-partial R^2 for %s: %.3f", term, semi_partial_r2))
+  }
+```
+

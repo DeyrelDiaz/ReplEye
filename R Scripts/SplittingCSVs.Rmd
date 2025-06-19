@@ -1,0 +1,226 @@
+---
+title: "SplittingCSVs"
+output: html_document
+date: "2024-01-15"
+---
+
+```{r, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Remove all objects, including hidden ones
+rm(list = ls(all.names = TRUE))
+
+# Load libraries
+if (!require(dplyr)) {
+  install.packages("dplyr")
+  library(dplyr)
+}
+if (!require(readr)) {
+  install.packages("readr")
+  library(readr)
+}
+
+#base_path <- "OutputData"
+base_path <- "AEGBData"
+
+# List all folders in the directory
+folders <- list.files(base_path, full.names = TRUE)
+```
+
+### Useful funcitons
+
+```{r}
+# Define the function to clean up the environment
+clean_up_environment <- function(keep_vars_list, keep_funcs = TRUE) {
+  # List all objects in the global environment
+  all_vars <- ls(envir = .GlobalEnv)
+  
+  # Identify the variables to remove, excluding the ones to keep
+  vars_to_remove <- setdiff(all_vars, keep_vars_list)
+  
+  if (keep_funcs) {
+    # Filter out functions from the list of variables to remove
+    vars_to_remove <- vars_to_remove[sapply(vars_to_remove, function(x) !is.function(get(x, envir = .GlobalEnv)))]
+  }
+  
+  # Remove the identified variables and functions from the global environment
+  rm(list = vars_to_remove, envir = .GlobalEnv)
+  
+  # Optionally, you can run gc() to free up memory
+  gc()
+}
+```
+
+### Renumbering Folders and PIDs
+
+Look at P_019 to fix where Mid is supposed to be MiddleEast
+
+```{r, eval = FALSE}
+# Filter folders with names with the format "P_000"
+p_folderNames <- grep("^P_\\d{3}$", basename(folders), value = TRUE)
+
+# List of the p folder paths
+p_folderPaths <- c()
+
+for (p_folder in p_folderNames) {
+  p_folderPaths <- c(p_folderPaths, file.path(base_path, p_folder))
+}
+
+folderNum <- 1
+totalFolders <- length(p_folderPaths)
+# Reorganize PID number and Folder number
+for (p_folderPath in p_folderPaths) {
+  
+  # Create the new folder name (e.g., "P_001", "P_002", etc.)
+  new_folder_name <- sprintf("P_%03d", folderNum)
+  new_folder_path <- file.path(dirname(p_folderPath), new_folder_name)
+  
+  # Rename the folder if necessary
+  if (basename(p_folderPath) != new_folder_name) {
+    file.rename(p_folderPath, new_folder_path)
+  }
+  
+  # Update the path to the renamed folder
+  p_folderPath <- new_folder_path
+  
+  # Read the MatrixData.csv file for the current participant
+  dfMatrix <- read.csv(file = sprintf("%s/MatrixData.CSV", p_folderPath))
+  dfGaze <- read.csv(file = sprintf("%s/RawGazeData.CSV", p_folderPath))
+  dfSurvey <- read.csv(file = sprintf("%s/SurveyData.CSV", p_folderPath))
+  
+  # Update the the PID column
+  dfMatrix[,1] <- folderNum
+  dfGaze[,1] <- folderNum
+  dfSurvey[,1] <- folderNum
+  
+  # Overwrite the original CSV files
+  write.csv(dfMatrix, file = sprintf("%s/MatrixData.CSV", p_folderPath), row.names = FALSE)
+  write.csv(dfGaze, file = sprintf("%s/RawGazeData.CSV", p_folderPath), row.names = FALSE)
+  write.csv(dfSurvey, file = sprintf("%s/SurveyData.CSV", p_folderPath), row.names = FALSE)
+  
+  # Increment the folder number for the next participant
+  folderNum <- folderNum + 1
+  
+  # Check if folderNum has reached the count of total folders
+  if (folderNum > totalFolders) {
+    break
+  }
+}
+
+# Delete any remaining folders
+remaining_folders <- p_folderPaths[folderNum:length(p_folderPaths)]
+for (folder in remaining_folders) {
+  # Delete the folder and its contents
+  unlink(folder, recursive = TRUE)
+}
+```
+
+
+### creating new duplicate split folders
+
+```{r}
+# Filter folders with names with the format "P_000"
+p_folderNames <- grep("^P_\\d{3}$", basename(folders), value = TRUE)
+totalFolders <- length(p_folderNames)
+
+# Filter folders with names with the format "S_000"
+s_folders <- grep("^S_\\d{3}$", basename(folders), value = TRUE)
+
+# If they already exist, delete them to be able to remake them
+for (s_folder in s_folders) {
+  folder_path <- file.path(base_path, s_folder)
+  
+  if (file.exists(folder_path)) {
+    unlink(folder_path, recursive = TRUE)
+    folders <- list.files(base_path, full.names = TRUE)
+  }
+}
+
+# Re-initialize the s_folders list
+s_folders <- c()
+
+# Fix each CSV file 'hispanic' race error
+for (p_folder in p_folderNames) {
+  file_path <- file.path(base_path, p_folder, "SurveyData.CSV")
+  
+  # Check if the file exists before processing
+  if (file.exists(file_path)) {
+    # Read the file as text
+    lines <- readLines(file_path)
+    
+    # Replace the comma within the specific string
+    lines <- gsub("Hispanic, Latino or Spanish origin", "Hispanic Latino or Spanish origin", lines)
+    
+    # Write the modified content back to the file
+    writeLines(lines, file_path)
+  }
+}
+
+# Create "S_000" folders
+for (p_folder in p_folderNames) {
+  # Extract the last 3 digits from the folder name
+  last_3_digits <- gsub("^P_(\\d{3})$", "\\1", basename(p_folder))
+  
+  # Create the new "S_000" folder
+  s_folder <- file.path(base_path, paste0("S_", last_3_digits))
+  
+  dir.create(s_folder)
+  s_folders <- c(s_folders, s_folder)
+}
+
+
+# List of the p folder paths
+p_folderPaths <- c()
+
+for (p_folder in p_folderNames) {
+  p_folderPaths <- c(p_folderPaths, file.path(base_path, p_folder))
+}
+
+folderNum <- 1
+# Split into trials for each participant
+for (p_folderPath in p_folderPaths) {
+  
+  # Read the MatrixData.csv file for the current participant
+  df <- read.csv(file = sprintf("%s/MatrixData.CSV", p_folderPath))
+  
+  # Split the DataFrame based on unique Race combination
+  sub_df_list <- split(df, list(df$Race))
+  
+  # Sort the list of dataframes to maintain order based on the first occurrence of each PID and Race combination in the original dataframe
+  sorted_sub_df_keys <- unique(paste(df$Race))
+  sorted_sub_df_list <- sub_df_list[sorted_sub_df_keys]
+  
+  # Initialize a counter for naming the trial files within each participant's folder
+  trialNum <- 1
+
+  # Iterate over the list of DataFrames to write each as a CSV
+  for (t_df_key in names(sorted_sub_df_list)) {
+    t_df <- sorted_sub_df_list[[t_df_key]]
+    
+    # Construct the filename with padding for the trial number
+    # Ensures lexical ordering e.g., T_001, T_002, ..., T_010, etc.
+    filename <- sprintf("%s/T_%03d.CSV", s_folders[folderNum], trialNum)
+    
+    # Write the DataFrame to a CSV file
+    if (!file.exists(dirname(filename))) {
+      dir.create(dirname(filename), recursive = TRUE)
+    }
+    
+    # Write the DataFrame to a CSV file
+    write.csv(t_df, file = filename, row.names = FALSE)  # row.names=FALSE to avoid writing row numbers
+    
+    # Increment the trial number for the next DataFrame
+    trialNum <- trialNum + 1
+  }
+  
+  # Increment the folder number for the next participant
+  folderNum <- folderNum + 1
+  
+  # Check if folderNum has reached the count of total folders
+  if (folderNum > totalFolders) {
+    break
+  }
+}
+
+clean_up_environment(c(),FALSE)
+```
